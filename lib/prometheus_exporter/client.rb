@@ -272,7 +272,7 @@ module PrometheusExporter
       require "openssl"
       ssl_context = OpenSSL::SSL::SSLContext.new()
       ssl_context.cert = OpenSSL::X509::Certificate.new(File.read(@tls_cert_file))
-      ssl_context.key = OpenSSL::PKey::RSA.new(File.read(@tls_key_file))
+      ssl_context.key = OpenSSL::PKey.read(File.read(@tls_key_file))
       ssl_context.ca_file = @tls_ca_file
       ssl_context.verify_mode = OpenSSL::SSL::VERIFY_PEER
       ssl_context
