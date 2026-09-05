@@ -214,11 +214,17 @@ module PrometheusExporter
           @socket.flush
           @socket.close
         end
-      rescue Errno::EPIPE
+      rescue StandardError
+        # The peer is already gone, which is the normal case here: this socket is being
+        # discarded either way. Errno::EPIPE used to be the only class handled, but a
+        # connection reset raises Errno::ECONNRESET and a TLS socket whose transport died
+        # raises OpenSSL::SSL::SSLError. Either one escaping used to skip the reset below,
+        # leaving @socket set for good -- ensure_socket! then never reconnects, and every
+        # later flush fails the same way until the process is restarted.
+      ensure
+        @socket = nil
+        @socket_started = nil
       end
-
-      @socket = nil
-      @socket_started = nil
     end
 
     def close_socket_if_old!
