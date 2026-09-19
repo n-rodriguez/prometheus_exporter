@@ -51,18 +51,19 @@ module PrometheusExporter::Metric
     def metric_text
       text = +""
       first = true
-      @observations.each do |labels, buckets|
+      # Colliding label sets are merged: their counts, sums and buckets all add up.
+      group_by_rendered_labels(@observations, "le").each do |rendered, rendered_text, keys|
         text << "\n" unless first
         first = false
-        count = @counts[labels]
-        sum = @sums[labels]
+        count = keys.sum { |key| @counts[key] }
+        sum = keys.sum { |key| @sums[key] }
         @buckets.each do |bucket|
-          value = @observations[labels][bucket]
-          text << "#{prefix(@name)}_bucket#{labels_text(with_bucket(labels, bucket.to_s))} #{value}\n"
+          value = keys.sum { |key| @observations[key][bucket] }
+          text << "#{prefix(@name)}_bucket#{labels_text(with_bucket(rendered, bucket.to_s))} #{value}\n"
         end
-        text << "#{prefix(@name)}_bucket#{labels_text(with_bucket(labels, "+Inf"))} #{count}\n"
-        text << "#{prefix(@name)}_count#{labels_text(labels)} #{count}\n"
-        text << "#{prefix(@name)}_sum#{labels_text(labels)} #{sum}"
+        text << "#{prefix(@name)}_bucket#{labels_text(with_bucket(rendered, "+Inf"))} #{count}\n"
+        text << "#{prefix(@name)}_count#{rendered_text} #{count}\n"
+        text << "#{prefix(@name)}_sum#{rendered_text} #{sum}"
       end
       text
     end
