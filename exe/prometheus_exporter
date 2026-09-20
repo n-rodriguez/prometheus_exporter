@@ -1,102 +1,124 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'optparse'
-require 'json'
-require 'logger'
+require "optparse"
+require "json"
+require "logger"
 
 require_relative "./../lib/prometheus_exporter"
 require_relative "./../lib/prometheus_exporter/server"
 
 def run
-  options = {
-    logger_path: STDERR
-  }
+  options = { logger_path: STDERR }
   custom_collector_filename = nil
   custom_type_collectors_filenames = []
 
-  OptionParser.new do |opt|
-    opt.banner = "Usage: prometheus_exporter [options]"
-    opt.on('-p',
-           '--port INTEGER',
-           Integer,
-           "Port exporter should listen on (default: #{PrometheusExporter::DEFAULT_PORT})") do |o|
-      port = o.to_i
-      # Out of range used to surface as Socket::ResolutionError at bind time, which reads
-      # as a DNS problem rather than as a bad port.
-      abort "Port must be between 1 and 65535, got #{port}" if port < 1 || port > 65_535
-      options[:port] = port
-    end
-    opt.on('-b',
-           '--bind STRING',
-           String,
-           "IP address exporter should listen on (default: #{PrometheusExporter::DEFAULT_BIND_ADDRESS})") do |o|
-      options[:bind] = o.to_s
-    end
-    opt.on('-t',
-           '--timeout INTEGER',
-           Integer,
-           "Timeout in seconds for metrics endpoint (default: #{PrometheusExporter::DEFAULT_TIMEOUT})") do |o|
-      options[:timeout] = o.to_i
-    end
-    opt.on('--prefix METRIC_PREFIX', "Prefix to apply to all metrics (default: #{PrometheusExporter::DEFAULT_PREFIX})") do |o|
-      options[:prefix] = o.to_s
-    end
-    opt.on('--label METRIC_LABEL', "Label to apply to all metrics (default: #{PrometheusExporter::DEFAULT_LABEL})") do |o|
-      # Both guards matter: a parse error used to print a six-frame backtrace through
-      # optparse, and a valid non-Hash was accepted at startup and only blew up at scrape
-      # time, leaving the target down with nothing in the exporter's own log.
-      begin
-        label = JSON.parse(o.to_s)
-      rescue JSON::ParserError => e
-        abort "--label must be a JSON object, could not parse it: #{e.message}"
+  OptionParser
+    .new do |opt|
+      opt.banner = "Usage: prometheus_exporter [options]"
+      opt.on(
+        "-p",
+        "--port INTEGER",
+        Integer,
+        "Port exporter should listen on (default: #{PrometheusExporter::DEFAULT_PORT})",
+      ) do |o|
+        port = o.to_i
+        # Out of range used to surface as Socket::ResolutionError at bind time, which reads
+        # as a DNS problem rather than as a bad port.
+        abort "Port must be between 1 and 65535, got #{port}" if port < 1 || port > 65_535
+        options[:port] = port
       end
+      opt.on(
+        "-b",
+        "--bind STRING",
+        String,
+        "IP address exporter should listen on (default: #{PrometheusExporter::DEFAULT_BIND_ADDRESS})",
+      ) { |o| options[:bind] = o.to_s }
+      opt.on(
+        "-t",
+        "--timeout INTEGER",
+        Integer,
+        "Timeout in seconds for metrics endpoint (default: #{PrometheusExporter::DEFAULT_TIMEOUT})",
+      ) { |o| options[:timeout] = o.to_i }
+      opt.on(
+        "--prefix METRIC_PREFIX",
+        "Prefix to apply to all metrics (default: #{PrometheusExporter::DEFAULT_PREFIX})",
+      ) { |o| options[:prefix] = o.to_s }
+      opt.on(
+        "--label METRIC_LABEL",
+        "Label to apply to all metrics (default: #{PrometheusExporter::DEFAULT_LABEL})",
+      ) do |o|
+        # Both guards matter: a parse error used to print a six-frame backtrace through
+        # optparse, and a valid non-Hash was accepted at startup and only blew up at scrape
+        # time, leaving the target down with nothing in the exporter's own log.
+        begin
+          label = JSON.parse(o.to_s)
+        rescue JSON::ParserError => e
+          abort "--label must be a JSON object, could not parse it: #{e.message}"
+        end
 
-      abort "--label must be a JSON object, got #{label.class}" if !label.is_a?(Hash)
+        abort "--label must be a JSON object, got #{label.class}" if !label.is_a?(Hash)
 
-      options[:label] = label
-    end
-    opt.on('-c', '--collector FILE', String, "(optional) Custom collector to run") do |o|
-      custom_collector_filename = o.to_s
-    end
-    opt.on('-a', '--type-collector FILE', String, "(optional) Custom type collectors to run in main collector") do |o|
-      custom_type_collectors_filenames << o
-    end
-    opt.on('-v', '--verbose') do |o|
-      options[:verbose] = true
-    end
-    opt.on('-g', '--histogram', "Use histogram instead of summary for aggregations") do |o|
-      options[:histogram] = true
-    end
-    opt.on('--auth FILE', String, "(optional) enable basic authentication using a htpasswd FILE") do |o|
-      options[:auth] = o
-    end
-    opt.on('--realm REALM', String, "(optional) Use REALM for basic authentication (default: \"#{PrometheusExporter::DEFAULT_REALM}\")") do |o|
-      options[:realm] = o
-    end
-    opt.on('--auth-send-metrics', "(optional) also require basic authentication on /send-metrics. Senders must be able to present credentials") do |o|
-      options[:auth_send_metrics] = true
-    end
+        options[:label] = label
+      end
+      opt.on("-c", "--collector FILE", String, "(optional) Custom collector to run") do |o|
+        custom_collector_filename = o.to_s
+      end
+      opt.on(
+        "-a",
+        "--type-collector FILE",
+        String,
+        "(optional) Custom type collectors to run in main collector",
+      ) { |o| custom_type_collectors_filenames << o }
+      opt.on("-v", "--verbose") { |o| options[:verbose] = true }
+      opt.on("-g", "--histogram", "Use histogram instead of summary for aggregations") do |o|
+        options[:histogram] = true
+      end
+      opt.on(
+        "--auth FILE",
+        String,
+        "(optional) enable basic authentication using a htpasswd FILE",
+      ) { |o| options[:auth] = o }
+      opt.on(
+        "--realm REALM",
+        String,
+        "(optional) Use REALM for basic authentication (default: \"#{PrometheusExporter::DEFAULT_REALM}\")",
+      ) { |o| options[:realm] = o }
+      opt.on(
+        "--auth-send-metrics",
+        "(optional) also require basic authentication on /send-metrics. Senders must be able to present credentials",
+      ) { |o| options[:auth_send_metrics] = true }
 
-    opt.on('--unicorn-listen-address ADDRESS', String, '(optional) Address where unicorn listens on (unix or TCP address)') do |o|
-      options[:unicorn_listen_address] = o
-    end
+      opt.on(
+        "--unicorn-listen-address ADDRESS",
+        String,
+        "(optional) Address where unicorn listens on (unix or TCP address)",
+      ) { |o| options[:unicorn_listen_address] = o }
 
-    opt.on('--unicorn-master PID_FILE', String, '(optional) PID file of unicorn master process to monitor unicorn') do |o|
-      options[:unicorn_pid_file] = o
-    end
+      opt.on(
+        "--unicorn-master PID_FILE",
+        String,
+        "(optional) PID file of unicorn master process to monitor unicorn",
+      ) { |o| options[:unicorn_pid_file] = o }
 
-    opt.on('--logger-path PATH', String, '(optional) Path to file for logger output. Defaults to STDERR') do |o|
-      options[:logger_path] = o
-    end
+      opt.on(
+        "--logger-path PATH",
+        String,
+        "(optional) Path to file for logger output. Defaults to STDERR",
+      ) { |o| options[:logger_path] = o }
 
-    opt.on('--tls-key-file PATH', String, "(optional) Enable server TLS using a private key PATH") do |o|
-      options[:tls_key_file] = o
+      opt.on(
+        "--tls-key-file PATH",
+        String,
+        "(optional) Enable server TLS using a private key PATH",
+      ) { |o| options[:tls_key_file] = o }
+      opt.on(
+        "--tls-cert-file PATH",
+        String,
+        "(optional) Enable server TLS using a certificate PATH",
+      ) { |o| options[:tls_cert_file] = o }
     end
-    opt.on('--tls-cert-file PATH', String, "(optional) Enable server TLS using a certificate PATH") do |o|
-      options[:tls_cert_file] = o
-    end
-  end.parse!
+    .parse!
 
   logger = Logger.new(options[:logger_path])
   logger.level = Logger::INFO

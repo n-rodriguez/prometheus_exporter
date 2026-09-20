@@ -1,0 +1,4 @@
+# The build context only needs the Dockerfile: the image installs a published gem. Keeping
+# .git out of it matters because a checkout that persisted credentials writes them into
+# .git/config, which would otherwise be sent to the daemon.
+*
