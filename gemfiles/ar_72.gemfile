@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-gem "appraisal", git: "https://github.com/thoughtbot/appraisal.git"
+gem "appraisal", git: "https://github.com/thoughtbot/appraisal.git", ref: "602cdd9b5f8cb8f36992733422f69312b172f427"
 gem "activerecord", "~> 7.2.0"
 gem "bundler", ">= 2.1.4"
 gem "m"
@@ -16,6 +16,7 @@ gem "rake"
 gem "redis"
 gem "syntax_tree"
 gem "syntax_tree-disable_ternary"
+gem "raindrops", "~> 0.19"
 gem "simplecov"
 gem "guard", require: false
 gem "guard-minitest", require: false

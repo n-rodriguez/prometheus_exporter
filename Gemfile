@@ -5,7 +5,12 @@ source "https://rubygems.org"
 gemspec
 
 # Dev libs
-gem "appraisal", git: "https://github.com/thoughtbot/appraisal.git"
+# Pinned by SHA: an unpinned git dependency resolves that repository's default
+# branch head on every CI run, so a force-push there executes arbitrary Ruby in a
+# job holding a write-scoped token.
+gem "appraisal",
+    git: "https://github.com/thoughtbot/appraisal.git",
+    ref: "602cdd9b5f8cb8f36992733422f69312b172f427"
 gem "activerecord", "~> 7.1"
 gem "bundler", ">= 2.1.4"
 gem "m"
@@ -19,7 +24,10 @@ gem "rake"
 gem "redis"
 gem "syntax_tree"
 gem "syntax_tree-disable_ternary"
-gem "raindrops", "~> 0.19" if !RUBY_ENGINE == "jruby"
+# != , not !x == y: the latter parses as (!RUBY_ENGINE) == "jruby", which is always
+# false, so raindrops was never installed and the Unicorn instrumentation was never
+# exercised by any matrix cell.
+gem "raindrops", "~> 0.19" if RUBY_ENGINE != "jruby"
 gem "simplecov"
 
 # Dev tools / linter

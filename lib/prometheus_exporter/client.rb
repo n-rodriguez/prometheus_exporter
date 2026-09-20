@@ -89,7 +89,14 @@ module PrometheusExporter
       @thread_sleep = thread_sleep
       @connect_timeout = connect_timeout
 
-      @json_serializer = json_serializer == :oj ? PrometheusExporter::OjCompat : JSON
+      # detect_json_serializer, so an explicit :oj without the gem installed falls back to
+      # JSON instead of raising NameError on the first dump -- in the calling thread, so
+      # inside a Sidekiq middleware's ensure, masking the job's own outcome. The default
+      # stays stdlib JSON on purpose: auto-detecting Oj here would silently change how
+      # every existing client serialises, and the two disagree on values such as
+      # Float::INFINITY, which Oj refuses.
+      @json_serializer =
+        json_serializer.nil? ? JSON : PrometheusExporter.detect_json_serializer(json_serializer)
 
       @custom_labels = custom_labels
       @process_queue_once_and_stop = process_queue_once_and_stop
