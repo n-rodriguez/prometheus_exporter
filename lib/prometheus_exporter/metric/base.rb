@@ -127,9 +127,9 @@ module PrometheusExporter::Metric
     attr_accessor :help, :data
     attr_reader :name
 
-    # Stores the name as given. Sanitizing here would silently change the key callers
-    # index metrics under -- Server::Collector looks metrics up by the raw payload name --
-    # so the coercion happens in #prefix, on the rendering path only.
+    # Stores the name as given: a caller may index metrics under it, and rewriting it here
+    # would change that key behind their back. The coercion happens in #prefix, on the
+    # rendering path only.
     def name=(name)
       @name = name.to_s
     end

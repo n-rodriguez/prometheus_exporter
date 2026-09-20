@@ -2,8 +2,20 @@
 
 require "simplecov"
 
-# Start SimpleCov
-SimpleCov.start { add_filter "test/" }
+# Start SimpleCov.
+#
+# The threshold is what makes the report do anything: without it a pull request could
+# delete the last assertions covering a collector and still go green, since nothing reads
+# the gitignored coverage directory. It is set a little under the figure measured when it
+# was introduced, so ordinary churn does not fail the build.
+#
+# Only enforced when the whole suite runs: `rake test TEST=one_file.rb` and guard each run
+# a single file, whose coverage is naturally far below the threshold, and failing those
+# would make the documented single-file command unusable.
+SimpleCov.start do
+  add_filter "test/"
+  minimum_coverage(line: 88) if ENV["TEST"].nil?
+end
 
 require "minitest/mock"
 require "minitest/autorun"

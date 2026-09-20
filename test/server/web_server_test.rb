@@ -321,4 +321,162 @@ class PrometheusExporterTest < Minitest::Test
       nil
     end
   end
+
+  # Stands in for a WEBrick request whose chunked body arrives in several pieces.
+  class FakeChunkedRequest
+    def initialize(chunks)
+      @chunks = chunks
+    end
+
+    def body(&blk)
+      @chunks.each(&blk)
+    end
+  end
+
+  class FakeResponse
+    attr_accessor :body, :status
+
+    def initialize
+      @body = nil
+      @status = nil
+    end
+  end
+
+  def test_it_keeps_processing_a_batch_after_one_bad_message
+    port = find_free_port
+    server = PrometheusExporter::Server::WebServer.new port: port
+    collector = server.collector
+
+    good_one = { "type" => "counter", "name" => "first_total", "value" => 1 }.to_json
+    bad = "this is not json"
+    good_two = { "type" => "counter", "name" => "second_total", "value" => 1 }.to_json
+
+    res = FakeResponse.new
+    server.handle_metrics(FakeChunkedRequest.new([good_one, bad, good_two]), res)
+
+    text = collector.prometheus_metrics_text
+
+    assert_match(/first_total 1/, text)
+    assert_match(/second_total 1/, text)
+  ensure
+    begin
+      server.stop
+    rescue StandardError
+      nil
+    end
+  end
+
+  def test_it_does_not_answer_200_when_a_message_was_rejected
+    port = find_free_port
+    server = PrometheusExporter::Server::WebServer.new port: port
+
+    res = FakeResponse.new
+    server.handle_metrics(FakeChunkedRequest.new(["not json"]), res)
+
+    assert_equal(500, res.status)
+    refute_equal("OK", res.body)
+  ensure
+    begin
+      server.stop
+    rescue StandardError
+      nil
+    end
+  end
+
+  def test_it_answers_200_when_every_message_was_accepted
+    port = find_free_port
+    server = PrometheusExporter::Server::WebServer.new port: port
+
+    payload = { "type" => "counter", "name" => "fine_total", "value" => 1 }.to_json
+    res = FakeResponse.new
+    server.handle_metrics(FakeChunkedRequest.new([payload, payload]), res)
+
+    assert_equal(200, res.status)
+    assert_equal("OK", res.body)
+  ensure
+    begin
+      server.stop
+    rescue StandardError
+      nil
+    end
+  end
+
+  def test_it_can_require_auth_on_send_metrics
+    port = find_free_port
+    server =
+      PrometheusExporter::Server::WebServer.new port: port,
+                                                auth: @auth_config[:file],
+                                                realm: @auth_config[:realm],
+                                                auth_send_metrics: true
+    server.start
+
+    Net::HTTP
+      .new("localhost", port)
+      .start do |http|
+        request = Net::HTTP::Post.new "/send-metrics"
+        request.body = { "type" => "counter", "name" => "sneaky_total", "value" => 1 }.to_json
+
+        http.request(request) { |response| assert_equal("401", response.code) }
+      end
+  ensure
+    begin
+      server.stop
+    rescue StandardError
+      nil
+    end
+  end
+
+  def test_it_leaves_send_metrics_open_by_default_under_auth
+    port = find_free_port
+    server =
+      PrometheusExporter::Server::WebServer.new port: port,
+                                                auth: @auth_config[:file],
+                                                realm: @auth_config[:realm]
+    server.start
+
+    Net::HTTP
+      .new("localhost", port)
+      .start do |http|
+        request = Net::HTTP::Post.new "/send-metrics"
+        request.body = { "type" => "counter", "name" => "legit_total", "value" => 1 }.to_json
+
+        http.request(request) { |response| assert_equal("200", response.code) }
+      end
+  ensure
+    begin
+      server.stop
+    rescue StandardError
+      nil
+    end
+  end
+
+  def test_it_refuses_an_htpasswd_file_webrick_cannot_parse
+    bad_file = "test/server/my_broken_htpasswd_file"
+    File.write(bad_file, "this is not an htpasswd line\n")
+    port = find_free_port
+
+    error =
+      assert_raises(ArgumentError) do
+        PrometheusExporter::Server::WebServer.new port: port, auth: bad_file
+      end
+
+    assert_match(/htpasswd/i, error.message)
+  ensure
+    File.delete(bad_file) if File.exist?(bad_file)
+  end
+
+  def test_it_refuses_an_htpasswd_format_webrick_cannot_read
+    md5_file = "test/server/my_md5_htpasswd_file"
+    File.write(md5_file, "test_user:$apr1$ZjTqBB3f$IF9gdYAGlMrs2fuINjHsz.\n")
+    port = find_free_port
+
+    error =
+      assert_raises(ArgumentError) do
+        PrometheusExporter::Server::WebServer.new port: port, auth: md5_file
+      end
+
+    assert_match(/htpasswd/i, error.message)
+  ensure
+    File.delete(md5_file) if File.exist?(md5_file)
+  end
 end
