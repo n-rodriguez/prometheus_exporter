@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 # collects stats from resque
 module PrometheusExporter::Instrumentation
   class Resque < PeriodicStats
@@ -9,7 +12,9 @@ module PrometheusExporter::Instrumentation
 
       worker_loop { client.send_json(resque_collector.collect) }
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
     def collect

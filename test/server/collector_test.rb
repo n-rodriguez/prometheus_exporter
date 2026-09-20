@@ -751,13 +751,13 @@ class PrometheusCollectorTest < Minitest::Test
     result = collector.prometheus_metrics_text
     assert(
       result.include?(
-        %Q[sidekiq_process_busy{labels="lab_1,lab_2",queues="queue_1,queue_2",quiet="false",tag="default",hostname="#{PrometheusExporter.hostname}",identity="hostname:0"} 1],
+        %Q[sidekiq_process_busy{labels="lab_1,lab_2",queues="queue_1,queue_2",quiet="false",hostname="#{PrometheusExporter.hostname}",tag="default",identity="hostname:0"} 1],
       ),
       "has number of busy",
     )
     assert(
       result.include?(
-        %Q[sidekiq_process_concurrency{labels="lab_1,lab_2",queues="queue_1,queue_2",quiet="false",tag="default",hostname="#{PrometheusExporter.hostname}",identity="hostname:0"} 2],
+        %Q[sidekiq_process_concurrency{labels="lab_1,lab_2",queues="queue_1,queue_2",quiet="false",hostname="#{PrometheusExporter.hostname}",tag="default",identity="hostname:0"} 2],
       ),
       "has number of concurrency",
     )

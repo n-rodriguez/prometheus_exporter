@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 require "json"
 
 # collects stats from puma
@@ -14,7 +17,9 @@ module PrometheusExporter::Instrumentation
         client.send_json metric
       end
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
     def initialize(metric_labels = {})
@@ -45,9 +50,13 @@ module PrometheusExporter::Instrumentation
         metric[:booted_workers] = stats["booted_workers"]
         metric[:old_workers] = stats["old_workers"]
 
-        stats["worker_status"].each do |worker|
-          next if worker["last_status"].empty?
-          collect_worker_status(metric, worker["last_status"])
+        (stats["worker_status"] || []).each do |worker|
+          # A worker freshly forked during a phased restart appears before its first
+          # status ping, with last_status nil rather than empty.
+          status = worker["last_status"]
+          next if status.nil? || status.empty?
+
+          collect_worker_status(metric, status)
         end
       else
         collect_worker_status(metric, stats)
@@ -57,17 +66,23 @@ module PrometheusExporter::Instrumentation
     private
 
     def collect_worker_status(metric, status)
-      metric[:request_backlog] ||= 0
-      metric[:running_threads] ||= 0
-      metric[:thread_pool_capacity] ||= 0
-      metric[:max_threads] ||= 0
-      metric[:busy_threads] ||= 0
+      # Only keys the Puma version actually reports are accumulated. Adding them blind
+      # raised TypeError on an unexpected layout, which PeriodicStats logs once before
+      # dropping the whole Puma batch; defaulting them to zero would be worse still, since
+      # a thread_pool_capacity of 0 reads as an exhausted pool rather than as a gauge this
+      # Puma does not publish.
+      {
+        request_backlog: "backlog",
+        running_threads: "running",
+        thread_pool_capacity: "pool_capacity",
+        max_threads: "max_threads",
+        busy_threads: "busy_threads",
+      }.each do |key, stat_name|
+        value = status[stat_name]
+        next if !value.is_a?(Numeric)
 
-      metric[:request_backlog] += status["backlog"]
-      metric[:running_threads] += status["running"]
-      metric[:thread_pool_capacity] += status["pool_capacity"]
-      metric[:max_threads] += status["max_threads"]
-      metric[:busy_threads] += status["busy_threads"]
+        metric[key] = (metric[key] || 0) + value
+      end
     end
   end
 end

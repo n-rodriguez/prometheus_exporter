@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 # collects stats from currently running process
 module PrometheusExporter::Instrumentation
   class Process < PeriodicStats
-    def self.start(client: nil, type: "ruby", frequency: 30, labels: nil)
+    def self.start(client: nil, type: "ruby", frequency: 30, labels: nil, include_v8: true)
       metric_labels =
         if labels && type
           labels.merge(type: type)
@@ -13,7 +16,7 @@ module PrometheusExporter::Instrumentation
           { type: type }
         end
 
-      process_collector = new(metric_labels)
+      process_collector = new(metric_labels, include_v8)
       client ||= PrometheusExporter::Client.default
 
       worker_loop do
@@ -21,11 +24,16 @@ module PrometheusExporter::Instrumentation
         client.send_json metric
       end
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
-    def initialize(metric_labels)
+    # include_v8 is positional on purpose: Process.new(type: "web") is a documented call
+    # passing a labels hash, and a keyword here would make Ruby read it as keywords.
+    def initialize(metric_labels, include_v8 = true)
       @metric_labels = metric_labels
+      @include_v8 = include_v8
     end
 
     def collect
@@ -34,7 +42,10 @@ module PrometheusExporter::Instrumentation
       metric[:metric_labels] = @metric_labels
       metric[:hostname] = ::PrometheusExporter.hostname
       collect_gc_stats(metric)
-      collect_v8_stats(metric)
+      # A full heap sweep plus a heap_stats call per context, every cycle, in a thread
+      # holding the GVL: on an application with a large heap this shows up as periodic
+      # request latency spikes.
+      collect_v8_stats(metric) if @include_v8
       collect_process_stats(metric)
       metric
     end
@@ -44,9 +55,13 @@ module PrometheusExporter::Instrumentation
     end
 
     def rss
+      # Etc.sysconf rather than backticks: forking a possibly multi-gigabyte Ruby process
+      # from a background thread can fail under memory pressure, and the 4096 fallback is
+      # wrong on arm64 Linux, which uses 16 KiB pages and would under-report RSS fourfold.
       @pagesize ||=
         begin
-          `getconf PAGESIZE`.to_i
+          require "etc"
+          Etc.sysconf(Etc::SC_PAGESIZE)
         rescue StandardError
           4096
         end

@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
+require_relative "../client"
+
 module PrometheusExporter::Instrumentation
   class Hutch
-    def initialize(klass)
+    def initialize(klass, client: nil)
       @klass = klass
-      @client = PrometheusExporter::Client.default
+      @client = client || PrometheusExporter::Client.default
     end
 
     def handle(message)

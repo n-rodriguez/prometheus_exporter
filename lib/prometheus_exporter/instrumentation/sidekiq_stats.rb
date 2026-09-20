@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 module PrometheusExporter::Instrumentation
   class SidekiqStats < PeriodicStats
     def self.start(client: nil, frequency: 30)
@@ -8,7 +11,9 @@ module PrometheusExporter::Instrumentation
 
       worker_loop { client.send_json(sidekiq_stats_collector.collect) }
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
     def collect

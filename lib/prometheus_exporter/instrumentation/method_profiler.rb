@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../client"
+
 # see https://samsaffron.com/archive/2017/10/18/fastest-way-to-profile-a-method-in-ruby
 module PrometheusExporter::Instrumentation
 end
@@ -16,26 +18,47 @@ class PrometheusExporter::Instrumentation::MethodProfiler
   end
 
   def self.transfer
-    result = Thread.current[:_method_profiler]
-    Thread.current[:_method_profiler] = nil
+    result = current
+    self.current = nil
     result
   end
 
   def self.start(transfer = nil)
-    Thread.current[:_method_profiler] = transfer ||
-      { __start: Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+    self.current = transfer || { __start: Process.clock_gettime(Process::CLOCK_MONOTONIC) }
   end
 
   def self.clear
-    Thread.current[:_method_profiler] = nil
+    self.current = nil
+  end
+
+  # Fiber storage, not Thread.current[] and not a thread variable. Thread.current[] is
+  # fiber-local, so an application issuing its DB calls from a child fiber read nil in the
+  # patched methods and shipped a payload with every sql/redis/memcache bucket missing --
+  # "zero DB time" rather than an error. A thread variable has the opposite flaw: under a
+  # fiber-per-request server like Falcon, concurrent requests on one thread would share a
+  # single hash. Fiber storage is inherited by child fibers and isolated between sibling
+  # ones, which is exactly the shape this needs.
+  def self.current
+    Fiber[:_method_profiler]
+  end
+
+  def self.current=(value)
+    Fiber[:_method_profiler] = value
   end
 
   def self.stop
     finish = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    if data = Thread.current[:_method_profiler]
-      Thread.current[:_method_profiler] = nil
+    if data = current
+      self.current = nil
       start = data.delete(:__start)
-      data[:total_duration] = finish - start
+
+      if start
+        data[:total_duration] = finish - start
+      elsif !data.key?(:total_duration)
+        # A hash with neither is one this class never produced. Returning it would have
+        # the caller observe a nil duration, which reads as a request that took 0 s.
+        return nil
+      end
     end
     data
   end
@@ -45,7 +68,7 @@ class PrometheusExporter::Instrumentation::MethodProfiler
 
     patches = methods.map { |method_name| <<~RUBY }.join("\n")
         def #{method_name}(...)
-          unless prof = Thread.current[:_method_profiler]
+          unless prof = Fiber[:_method_profiler]
             return super
           end
           begin
@@ -76,7 +99,7 @@ class PrometheusExporter::Instrumentation::MethodProfiler
         alias_method :#{method_name}__mp_unpatched, :#{method_name}
 
         def #{method_name}(...)
-          unless prof = Thread.current[:_method_profiler]
+          unless prof = Fiber[:_method_profiler]
             return #{method_name}__mp_unpatched(...)
           end
 
