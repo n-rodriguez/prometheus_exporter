@@ -9,6 +9,7 @@ class PrometheusWebCollectorTest < Minitest::Test
   def setup
     PrometheusExporter::Metric::Base.default_prefix = ""
     PrometheusExporter::Metric::Base.default_aggregation = nil
+    PrometheusExporter::Server::TypeCollector.reset_dropped_series!
   end
 
   def teardown

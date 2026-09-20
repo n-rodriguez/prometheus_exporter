@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 # collects stats from currently running process
 module PrometheusExporter::Instrumentation
   class ActiveRecord < PeriodicStats
@@ -16,7 +19,9 @@ module PrometheusExporter::Instrumentation
         return
       end
 
-      config_labels.map!(&:to_sym)
+      # Non-destructive: map! rewrote the caller's array, and raised FrozenError outright
+      # on a frozen literal.
+      config_labels = config_labels.map(&:to_sym)
       validate_config_labels(config_labels)
 
       active_record_collector = new(custom_labels, config_labels)
@@ -26,7 +31,9 @@ module PrometheusExporter::Instrumentation
         metrics.each { |metric| client.send_json metric }
       end
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
     def self.validate_config_labels(config_labels)
@@ -51,8 +58,28 @@ module PrometheusExporter::Instrumentation
       @pid = ::Process.pid
     end
 
+    # The connection handler's own list, not ObjectSpace: sweeping the whole heap every
+    # cycle holds the GVL throughout, and returns superseded pools that are unreachable
+    # but not yet collected -- two samples carrying the same pool_name in one batch.
+    def connection_pools
+      handler = ::ActiveRecord::Base.connection_handler
+
+      # connection_pool_list first: all_connection_pools exists only on AR 7.1, where it
+      # is already deprecated, and warns -- or raises, under deprecation = :raise -- on
+      # every cycle.
+      if handler.respond_to?(:connection_pool_list)
+        handler.connection_pool_list(:all)
+      elsif handler.respond_to?(:all_connection_pools)
+        handler.all_connection_pools
+      else
+        []
+      end
+      # No rescue: PeriodicStats logs what comes out of the worker loop, and swallowing it
+      # here would make the metrics vanish without a trace.
+    end
+
     def collect_active_record_pool_stats(metrics)
-      ObjectSpace.each_object(::ActiveRecord::ConnectionAdapters::ConnectionPool) do |pool|
+      connection_pools.each do |pool|
         next if pool.connections.nil?
 
         metric = {

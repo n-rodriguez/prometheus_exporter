@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../client"
+
 require "yaml"
 
 module PrometheusExporter::Instrumentation
@@ -35,7 +37,11 @@ module PrometheusExporter::Instrumentation
       # TODO remove when version 3.0.0 is released
       method_arity = worker_class.method(:custom_labels).arity
 
-      if method_arity > 0
+      # arity != 0, not > 0: an optional parameter gives a negative arity, so
+      # `def custom_labels(msg, opts = {})` -- arity -2 -- was called with no arguments
+      # and raised ArgumentError from the middleware's ensure, replacing the job's own
+      # result with a failure unrelated to the job.
+      if method_arity != 0
         worker_class.custom_labels(msg)
       else
         worker_class.custom_labels
@@ -57,7 +63,19 @@ module PrometheusExporter::Instrumentation
       shutdown = true
       raise e
     ensure
-      duration = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start
+      # Nothing here may raise: this runs in an ensure, so an exception would replace the
+      # job's own result -- success or failure -- with one about the metrics.
+      begin
+        duration = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start
+        emit_job_metric(worker, queue, msg, success, shutdown, duration)
+      rescue StandardError
+        nil
+      end
+    end
+
+    private
+
+    def emit_job_metric(worker, queue, msg, success, shutdown, duration)
       @client.send_json(
         type: "sidekiq",
         name: self.class.get_name(worker.class.to_s, msg),
@@ -69,8 +87,8 @@ module PrometheusExporter::Instrumentation
       )
     end
 
-    private
-
+    # Defined before private_class_method below, which is what actually makes them
+    # internal -- a bare `private` has no effect on singleton methods.
     def self.get_name(class_name, msg)
       if class_name == JOB_WRAPPER_CLASS_NAME
         get_job_wrapper_name(msg)

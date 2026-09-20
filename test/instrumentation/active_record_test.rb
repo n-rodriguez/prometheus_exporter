@@ -8,7 +8,6 @@ class PrometheusInstrumentationActiveRecordTest < Minitest::Test
   def setup
     super
 
-    # With this trick this variable with be accessible with ::ObjectSpace
     @pool =
       if active_record_version >= Gem::Version.create("6.1.0.rc1")
         active_record61_pool
@@ -17,6 +16,12 @@ class PrometheusInstrumentationActiveRecordTest < Minitest::Test
       else
         raise "unsupported active_record version"
       end
+  end
+
+  # The pools are taken from the connection handler rather than swept out of ObjectSpace,
+  # and a pool built here is never registered with it, so it is handed over directly.
+  def collect
+    collector.stub(:connection_pools, [@pool]) { collector.collect }
   end
 
   def metric_labels
@@ -34,16 +39,22 @@ class PrometheusInstrumentationActiveRecordTest < Minitest::Test
 
   %i[size connections busy dead idle waiting checkout_timeout type metric_labels].each do |key|
     define_method("test_collecting_metrics_contain_#{key}_key") do
-      assert_includes collector.collect.first, key
+      assert_includes collect.first, key
     end
   end
 
   def test_metrics_labels
-    assert_includes collector.collect.first[:metric_labels], :foo
+    assert_includes collect.first[:metric_labels], :foo
   end
 
   def test_type
-    assert_equal collector.collect.first[:type], "active_record"
+    assert_equal collect.first[:type], "active_record"
+  end
+
+  def test_pools_come_from_the_connection_handler
+    handler = ::ActiveRecord::Base.connection_handler
+
+    assert_equal(handler.connection_pool_list(:all), collector.connection_pools)
   end
 
   private

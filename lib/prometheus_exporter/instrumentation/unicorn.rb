@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "periodic_stats"
+require_relative "../client"
+
 begin
   require "raindrops"
 rescue LoadError
@@ -18,7 +21,9 @@ module PrometheusExporter::Instrumentation
         client.send_json metric
       end
 
-      super
+      # Explicit: PeriodicStats.start no longer accepts a catch-all, so a keyword this
+      # subclass owns must not be forwarded to it.
+      super(frequency: frequency, client: client)
     end
 
     def initialize(pid_file:, listener_address:)
@@ -52,8 +57,20 @@ module PrometheusExporter::Instrumentation
 
       # find all processes whose parent is the unicorn master
       # but we're actually only interested in the number of processes (= lines of output)
-      result = `pgrep -P #{pid} -f unicorn -a`
+      result = worker_pgrep(pid)
+
+      # pgrep exits 1 when it matched nothing, which is a genuine zero and must still be
+      # reported -- that is the value an alert on "no workers left" fires on. Any other
+      # status means the tool itself failed, and a measurement we do not have is better
+      # left absent than reported as zero.
+      status = $?.exitstatus
+      return nil if status != 0 && status != 1
+
       result.lines.count
+    end
+
+    def worker_pgrep(pid)
+      `pgrep -P #{pid} -f unicorn -a`
     end
 
     def listener_address_stats
