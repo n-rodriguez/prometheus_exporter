@@ -18,6 +18,7 @@ module PrometheusExporter::Server
       @type_collectors = nil
       @prefix = nil
       @auth = nil
+      @auth_send_metrics = false
       @realm = nil
       @histogram = nil
 
@@ -58,6 +59,7 @@ module PrometheusExporter::Server
           timeout: timeout,
           verbose: verbose,
           auth: auth,
+          auth_send_metrics: auth_send_metrics,
           realm: realm,
           tls_cert_file: tls_cert_file,
           tls_key_file: tls_key_file,
@@ -80,11 +82,16 @@ module PrometheusExporter::Server
                 :server_class,
                 :label,
                 :auth,
+                :auth_send_metrics,
                 :realm,
                 :histogram
 
     def auth
       @auth || nil
+    end
+
+    def auth_send_metrics
+      @auth_send_metrics || false
     end
 
     def realm

@@ -21,7 +21,11 @@ def run
            '--port INTEGER',
            Integer,
            "Port exporter should listen on (default: #{PrometheusExporter::DEFAULT_PORT})") do |o|
-      options[:port] = o.to_i
+      port = o.to_i
+      # Out of range used to surface as Socket::ResolutionError at bind time, which reads
+      # as a DNS problem rather than as a bad port.
+      abort "Port must be between 1 and 65535, got #{port}" if port < 1 || port > 65_535
+      options[:port] = port
     end
     opt.on('-b',
            '--bind STRING',
@@ -39,7 +43,18 @@ def run
       options[:prefix] = o.to_s
     end
     opt.on('--label METRIC_LABEL', "Label to apply to all metrics (default: #{PrometheusExporter::DEFAULT_LABEL})") do |o|
-      options[:label] = JSON.parse(o.to_s)
+      # Both guards matter: a parse error used to print a six-frame backtrace through
+      # optparse, and a valid non-Hash was accepted at startup and only blew up at scrape
+      # time, leaving the target down with nothing in the exporter's own log.
+      begin
+        label = JSON.parse(o.to_s)
+      rescue JSON::ParserError => e
+        abort "--label must be a JSON object, could not parse it: #{e.message}"
+      end
+
+      abort "--label must be a JSON object, got #{label.class}" if !label.is_a?(Hash)
+
+      options[:label] = label
     end
     opt.on('-c', '--collector FILE', String, "(optional) Custom collector to run") do |o|
       custom_collector_filename = o.to_s
@@ -58,6 +73,9 @@ def run
     end
     opt.on('--realm REALM', String, "(optional) Use REALM for basic authentication (default: \"#{PrometheusExporter::DEFAULT_REALM}\")") do |o|
       options[:realm] = o
+    end
+    opt.on('--auth-send-metrics', "(optional) also require basic authentication on /send-metrics. Senders must be able to present credentials") do |o|
+      options[:auth_send_metrics] = true
     end
 
     opt.on('--unicorn-listen-address ADDRESS', String, '(optional) Address where unicorn listens on (unix or TCP address)') do |o|
@@ -87,6 +105,11 @@ def run
     logger.warn "Providing REALM without AUTH has no effect"
   end
 
+  if options.has_key?(:auth_send_metrics) && !options.has_key?(:auth)
+    logger.fatal "--auth-send-metrics requires --auth"
+    exit 1
+  end
+
   if options.has_key?(:auth)
     unless File.exist?(options[:auth]) && File.readable?(options[:auth])
       logger.fatal "The AUTH file either doesn't exist or we don't have access to it"
@@ -94,42 +117,107 @@ def run
     end
   end
 
+  # Both sweeps below compare ObjectSpace before and after the require, rather than
+  # scanning it once afterwards. Scanning once also matched the built-in classes: the
+  # collector sweep could pick the shipped Collector, or an abstract base declared
+  # alongside the real class, and the exporter then served that class's empty rendering
+  # without a word; the type-collector sweep returned all fourteen built-ins even with no
+  # custom file loaded, which made Runner call register_collector on a custom collector
+  # that does not implement it, right after announcing it had started.
+  def subclasses_of(base)
+    found = []
+    ObjectSpace.each_object(Class) { |klass| found << klass if klass < base }
+    found
+  end
+
   if custom_collector_filename
-    require File.expand_path(custom_collector_filename)
-    found = false
-
     base_klass = PrometheusExporter::Server::CollectorBase
+    before = subclasses_of(base_klass)
+    require File.expand_path(custom_collector_filename)
+    candidates = subclasses_of(base_klass) - before
 
-    ObjectSpace.each_object(Class) do |klass|
-      if klass < base_klass && klass != base_klass
-        options[:collector_class] = klass
-        found = true
-      end
-    end
-
-    if !found
+    if candidates.empty?
       logger.fatal "Can not find a class inheriting off PrometheusExporter::Server::CollectorBase"
       exit 1
     end
+
+    # A file declaring an abstract base next to the concrete class is a normal shape, so
+    # only classes that nothing else inherits from are candidates. What must stay refused
+    # is a genuine ambiguity between two unrelated collectors.
+    leaves = candidates.reject { |klass| candidates.any? { |other| other < klass } }
+
+    if leaves.length > 1
+      logger.fatal "#{custom_collector_filename} defines #{leaves.length} unrelated collectors " \
+                     "(#{leaves.join(", ")}); it must define exactly one"
+      exit 1
+    end
+
+    candidates = leaves
+
+    options[:collector_class] = candidates.first
+    logger.info "Using custom collector #{options[:collector_class]}"
   end
 
   if custom_type_collectors_filenames.length > 0
-    custom_type_collectors_filenames.each do |t|
-      require File.expand_path(t)
+    base_klass = PrometheusExporter::Server::TypeCollector
+    before = subclasses_of(base_klass)
+
+    custom_type_collectors_filenames.each { |t| require File.expand_path(t) }
+
+    options[:type_collectors] = subclasses_of(base_klass) - before
+
+    if options[:type_collectors].empty?
+      logger.fatal "Can not find a class inheriting off PrometheusExporter::Server::TypeCollector"
+      exit 1
     end
 
-    ObjectSpace.each_object(Class) do |klass|
-      if klass < PrometheusExporter::Server::TypeCollector
-        options[:type_collectors] ||= []
-        options[:type_collectors] << klass
-      end
-    end
+    logger.info "Using custom type collectors #{options[:type_collectors].join(", ")}"
+  end
+
+  # Half a TLS pair is a configuration mistake that used to start a plaintext listener
+  # while the operator believed /metrics was HTTPS -- basic-auth credentials included.
+  if options.key?(:tls_cert_file) ^ options.key?(:tls_key_file)
+    logger.fatal "--tls-cert-file and --tls-key-file must be supplied together"
+    exit 1
+  end
+
+  %i[tls_cert_file tls_key_file].each do |key|
+    path = options[key]
+    next if path.nil?
+    next if File.exist?(path) && File.readable?(path)
+
+    # Checked here like the auth file is: an unreadable pair otherwise surfaced as an
+    # unrescued Errno::ENOENT out of WebServer#initialize.
+    logger.fatal "The --#{key.to_s.tr("_", "-")} either doesn't exist or we don't have access to it"
+    exit 1
   end
 
   runner = PrometheusExporter::Server::Runner.new(options)
 
   logger.info "Starting prometheus exporter on #{runner.bind}:#{runner.port}"
   runner.start
+
+  # Without these, a docker stop during a scrape cut the connection mid-response and
+  # Prometheus logged a scrape error: the bare sleep below exited on the default handler,
+  # so Runner#stop and WEBrick's clean shutdown were never reached.
+  stopping = false
+  %w[TERM INT].each do |signal|
+    Signal.trap(signal) do
+      next if stopping
+
+      stopping = true
+      Thread.new do
+        begin
+          runner.stop
+        ensure
+          # Without the ensure, a raising stop left the main thread asleep forever while
+          # the stopping flag swallowed every later signal.
+          exit 0
+        end
+      end
+    end
+  end
+
   sleep
 end
 
