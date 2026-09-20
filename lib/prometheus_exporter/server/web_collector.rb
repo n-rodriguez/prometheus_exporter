@@ -22,7 +22,7 @@ module PrometheusExporter::Server
     end
 
     def metrics
-      @metrics.values
+      @metrics.values + PrometheusExporter::Server::TypeCollector.dropped_series_metrics
     end
 
     protected
@@ -70,11 +70,13 @@ module PrometheusExporter::Server
     end
 
     def observe(obj)
-      default_labels = obj["default_labels"]
-      custom_labels = obj["custom_labels"]
-      labels = custom_labels.nil? ? default_labels : default_labels.merge(custom_labels)
+      # Both keys are optional on the wire, and a JSON null yields nil rather than {}.
+      labels = labels_hash(obj["default_labels"]).merge(labels_hash(obj["custom_labels"]))
 
-      @http_requests_total.observe(1, labels.merge("status" => obj["status"]))
+      status_labels = labels.merge("status" => obj["status"])
+      return drop_series(status_labels) if series_capped?(@http_requests_total, status_labels)
+
+      @http_requests_total.observe(1, status_labels)
 
       if timings = obj["timings"]
         @http_request_duration_seconds.observe(timings["total_duration"], labels)

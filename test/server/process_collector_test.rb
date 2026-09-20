@@ -37,18 +37,18 @@ class ProcessCollectorTest < Minitest::Test
 
     assert_equal 12, collector.metrics.size
     assert_equal [
-                   'heap_free_slots{pid="1000",hostname="localhost"} 1000',
-                   'heap_live_slots{pid="1000",hostname="localhost"} 1001',
-                   'v8_heap_size{pid="1000",hostname="localhost"} 2000',
-                   'v8_used_heap_size{pid="1000",hostname="localhost"} 2001',
-                   'v8_physical_size{pid="1000",hostname="localhost"} 2003',
-                   'v8_heap_count{pid="1000",hostname="localhost"} 2004',
-                   'rss{pid="1000",hostname="localhost"} 3000',
-                   'marking_time{pid="1000",hostname="localhost"} 4003',
-                   'sweeping_time{pid="1000",hostname="localhost"} 4004',
-                   'major_gc_ops_total{pid="1000",hostname="localhost"} 4000',
-                   'minor_gc_ops_total{pid="1000",hostname="localhost"} 4001',
-                   'allocated_objects_total{pid="1000",hostname="localhost"} 4002',
+                   'process_heap_free_slots{pid="1000",hostname="localhost"} 1000',
+                   'process_heap_live_slots{pid="1000",hostname="localhost"} 1001',
+                   'process_v8_heap_size{pid="1000",hostname="localhost"} 2000',
+                   'process_v8_used_heap_size{pid="1000",hostname="localhost"} 2001',
+                   'process_v8_physical_size{pid="1000",hostname="localhost"} 2003',
+                   'process_v8_heap_count{pid="1000",hostname="localhost"} 2004',
+                   'process_rss{pid="1000",hostname="localhost"} 3000',
+                   'process_marking_time{pid="1000",hostname="localhost"} 4003',
+                   'process_sweeping_time{pid="1000",hostname="localhost"} 4004',
+                   'process_major_gc_ops_total{pid="1000",hostname="localhost"} 4000',
+                   'process_minor_gc_ops_total{pid="1000",hostname="localhost"} 4001',
+                   'process_allocated_objects_total{pid="1000",hostname="localhost"} 4002',
                  ],
                  collector_metric_lines
   end

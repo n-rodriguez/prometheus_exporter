@@ -47,7 +47,10 @@ class PrometheusUnicornCollectorTest < Minitest::Test
       "request_backlog" => 0,
       "hostname" => "localhost2",
     )
-    assert_equal 3, collector_metric_lines.size
+
+    # Two samples from the same master collapse into one; a second master is a series of
+    # its own. It used to overwrite the first one instead, silently.
+    assert_equal 6, collector_metric_lines.size
   end
 
   def test_metrics_expiration

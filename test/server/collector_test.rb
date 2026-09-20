@@ -80,7 +80,7 @@ class PrometheusCollectorTest < Minitest::Test
 
     assert_equal(false, PrometheusExporter::Instrumentation::Process.started?)
 
-    assert_match(/heap_live_slots/, metrics_text)
+    assert_match(/process_heap_live_slots/, metrics_text)
     assert_match(/hello.*custom label/, metrics_text)
   end
 
@@ -790,14 +790,14 @@ class PrometheusCollectorTest < Minitest::Test
     end
 
     result = collector.prometheus_metrics_text
-    assert_includes(result, "sidekiq_stats_dead_size 1")
-    assert_includes(result, "sidekiq_stats_enqueued 2")
-    assert_includes(result, "sidekiq_stats_failed 3")
-    assert_includes(result, "sidekiq_stats_processed 4")
-    assert_includes(result, "sidekiq_stats_processes_size 5")
-    assert_includes(result, "sidekiq_stats_retry_size 6")
-    assert_includes(result, "sidekiq_stats_scheduled_size 7")
-    assert_includes(result, "sidekiq_stats_workers_size 8")
+    assert_includes(result, 'sidekiq_stats_dead_size{service="service1"} 1')
+    assert_includes(result, 'sidekiq_stats_enqueued{service="service1"} 2')
+    assert_includes(result, 'sidekiq_stats_failed{service="service1"} 3')
+    assert_includes(result, 'sidekiq_stats_processed{service="service1"} 4')
+    assert_includes(result, 'sidekiq_stats_processes_size{service="service1"} 5')
+    assert_includes(result, 'sidekiq_stats_retry_size{service="service1"} 6')
+    assert_includes(result, 'sidekiq_stats_scheduled_size{service="service1"} 7')
+    assert_includes(result, 'sidekiq_stats_workers_size{service="service1"} 8')
     mock_sidekiq_stats.verify
     mock_sidekiq_stats_new.verify
   end

@@ -14,12 +14,14 @@ module PrometheusExporter::Server
     end
 
     def collect(obj)
-      default_labels = { job_name: obj["name"] }
-      custom_labels = obj["custom_labels"]
-      labels = custom_labels.nil? ? default_labels : default_labels.merge(custom_labels)
+      # String keys: see DelayedJobCollector#collect.
+      default_labels = { "job_name" => obj["name"] }
+      labels = default_labels.merge(labels_hash(obj["custom_labels"]))
 
       ensure_hutch_metrics
-      @hutch_job_duration_seconds.observe(obj["duration"], labels)
+      return drop_series(labels) if series_capped?(@hutch_jobs_total, labels)
+
+      @hutch_job_duration_seconds.observe(obj["duration"], labels) if obj["duration"]
       @hutch_jobs_total.observe(1, labels)
       @hutch_failed_jobs_total.observe(1, labels) if !obj["success"]
     end

@@ -16,15 +16,19 @@ module PrometheusExporter::Server
     end
 
     def collect(obj)
-      default_labels = { job_name: obj["name"], queue: obj["queue"] }
-      custom_labels = obj["custom_labels"]
-      labels = custom_labels.nil? ? default_labels : default_labels.merge(custom_labels)
+      # String keys: see DelayedJobCollector#collect.
+      default_labels = { "job_name" => obj["name"], "queue" => obj["queue"] }
+      labels = default_labels.merge(labels_hash(obj["custom_labels"]))
 
       ensure_sidekiq_metrics
       if obj["dead"]
+        return drop_series(labels) if series_capped?(@sidekiq_dead_jobs_total, labels)
+
         @sidekiq_dead_jobs_total.observe(1, labels)
       else
-        @sidekiq_job_duration_seconds.observe(obj["duration"], labels)
+        return drop_series(labels) if series_capped?(@sidekiq_jobs_total, labels)
+
+        @sidekiq_job_duration_seconds.observe(obj["duration"], labels) if obj["duration"]
         @sidekiq_jobs_total.observe(1, labels)
         @sidekiq_restarted_jobs_total.observe(1, labels) if obj["shutdown"]
         @sidekiq_failed_jobs_total.observe(1, labels) if !obj["success"] && !obj["shutdown"]

@@ -22,10 +22,14 @@ module PrometheusExporter::Server
     end
 
     def metrics
+      # Reset first: see GoodJobCollector#metrics.
+      RESQUE_GAUGES.each_key { |name| gauges[name.to_s]&.reset! }
+
       return [] if resque_metrics.length == 0
 
       resque_metrics.map do |metric|
-        labels = metric.fetch("custom_labels", {})
+        labels = # fetch returns nil, not {}, when the key is present with a JSON null.
+          metric["custom_labels"] || {}
 
         RESQUE_GAUGES.map do |name, help|
           name = name.to_s

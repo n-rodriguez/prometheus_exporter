@@ -2,7 +2,9 @@
 
 module PrometheusExporter::Server
   class PumaCollector < TypeCollector
-    MAX_PUMA_METRIC_AGE = 30
+    MAX_METRIC_AGE = 30
+    # Kept so an operator who overrode the old name still gets an effect.
+    MAX_PUMA_METRIC_AGE = MAX_METRIC_AGE
     PUMA_GAUGES = {
       workers: "Number of puma workers.",
       booted_workers: "Number of puma workers booted.",
@@ -11,17 +13,15 @@ module PrometheusExporter::Server
       request_backlog: "Number of requests waiting to be processed by a puma thread.",
       thread_pool_capacity: "Number of puma threads available at current scale.",
       max_threads: "Number of puma threads at available at max scale.",
+      # Declared unconditionally: it used to depend on Puma being loaded in the exporter
+      # process, which nothing does, so a standalone exporter dropped the value a Puma
+      # 6.6 sender was faithfully reporting. An absent key is filtered out below anyway.
+      busy_threads:
+        "Wholistic stat reflecting the overall current state of work to be done and the capacity to do it",
     }
 
-    if defined?(::Puma::Const) &&
-         Gem::Version.new(::Puma::Const::VERSION) >= Gem::Version.new("6.6.0")
-      PUMA_GAUGES[
-        :busy_threads
-      ] = "Wholistic stat reflecting the overall current state of work to be done and the capacity to do it"
-    end
-
     def initialize
-      @puma_metrics = MetricsContainer.new(ttl: MAX_PUMA_METRIC_AGE)
+      @puma_metrics = MetricsContainer.new(ttl: MAX_METRIC_AGE)
       @puma_metrics.filter = ->(new_metric, old_metric) do
         new_metric["pid"] == old_metric["pid"] && new_metric["hostname"] == old_metric["hostname"]
       end

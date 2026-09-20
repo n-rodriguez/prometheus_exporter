@@ -41,7 +41,10 @@ module PrometheusExporter::Server
     end
 
     def collect(object)
-      @sidekiq_metrics << object["process"]
+      process = object["process"]
+      return if !process.is_a?(Hash)
+
+      @sidekiq_metrics << process
     end
   end
 end

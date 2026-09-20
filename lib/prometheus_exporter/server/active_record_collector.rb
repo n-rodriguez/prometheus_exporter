@@ -18,7 +18,8 @@ module PrometheusExporter::Server
       @active_record_metrics.filter = ->(new_metric, old_metric) do
         new_metric["pid"] == old_metric["pid"] &&
           new_metric["hostname"] == old_metric["hostname"] &&
-          new_metric["metric_labels"]["pool_name"] == old_metric["metric_labels"]["pool_name"]
+          (new_metric["metric_labels"] || {})["pool_name"] ==
+            (old_metric["metric_labels"] || {})["pool_name"]
       end
     end
 
