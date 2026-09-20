@@ -225,4 +225,68 @@ class PrometheusExporterMiddlewareTest < Minitest::Test
       end
     end
   end
+
+  def test_a_malformed_amzn_trace_id_does_not_break_the_request
+    configure_middleware
+    get "/", {}, { "HTTP_X_AMZN_TRACE_ID" => "Root=abc" }
+
+    assert last_response.ok?
+    assert_nil(client.last_send[:queue_time])
+  end
+
+  def test_an_amzn_trace_id_with_no_root_does_not_break_the_request
+    configure_middleware
+    get "/", {}, { "HTTP_X_AMZN_TRACE_ID" => "Self=1-2-3" }
+
+    assert last_response.ok?
+  end
+
+  def test_a_garbage_request_start_is_not_recorded_as_a_duration
+    configure_middleware
+    get "/", {}, { "HTTP_X_REQUEST_START" => "t=garbage" }
+
+    assert last_response.ok?
+    assert_nil(client.last_send[:queue_time])
+  end
+
+  def test_a_request_start_that_is_not_a_timestamp_is_not_recorded
+    configure_middleware
+    get "/", {}, { "HTTP_X_REQUEST_START" => "t=1" }
+
+    assert last_response.ok?
+    assert_nil(client.last_send[:queue_time])
+  end
+
+  def test_a_well_formed_but_implausibly_old_request_start_is_not_recorded
+    configure_middleware
+    # Well formed, and more than MAX_QUEUE_TIME before the stubbed request start.
+    get "/", {}, { "HTTP_X_REQUEST_START" => "t=1000000000.000" }
+
+    assert last_response.ok?
+    assert_nil(client.last_send[:queue_time])
+  end
+
+  def test_the_first_of_two_joined_request_start_headers_is_read
+    configure_middleware
+    get "/", {}, { "HTTP_X_REQUEST_START" => "t=1234567890.123, t=1234567891.100" }
+
+    assert last_response.ok?
+    assert_in_delta(1.0, client.last_send[:queue_time], 0.5)
+  end
+
+  def test_a_bare_amzn_trace_root_does_not_break_the_request
+    configure_middleware
+    get "/", {}, { "HTTP_X_AMZN_TRACE_ID" => "Root=" }
+
+    assert last_response.ok?
+    assert_nil(client.last_send[:queue_time])
+  end
+
+  def test_a_well_formed_request_start_is_still_recorded
+    configure_middleware
+    get "/", {}, { "HTTP_X_REQUEST_START" => "t=1234567890.123" }
+
+    assert last_response.ok?
+    assert_in_delta(1.0, client.last_send[:queue_time], 0.5)
+  end
 end

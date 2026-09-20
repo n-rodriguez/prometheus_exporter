@@ -98,6 +98,12 @@ module PrometheusExporter
       @tls_cert_file = tls_cert_file
       @tls_key_file = tls_key_file
 
+      # Verifying the server without presenting a client certificate is the usual setup,
+      # and it used to leave the traffic in plaintext with no error at all.
+      if @tls_cert_file.nil? ^ @tls_key_file.nil?
+        raise ArgumentError, "tls_cert_file and tls_key_file must be supplied together, or neither"
+      end
+
       @ssl_context = build_ssl_context if use_ssl?
     end
 
@@ -139,7 +145,14 @@ module PrometheusExporter
       @queue << str
       if @queue.length > @max_queue_size
         logger.warn "Prometheus Exporter client is dropping message cause queue is full"
-        @queue.pop
+        # Non-blocking: the check above and this pop are not atomic, so the worker thread
+        # can drain the queue in between, and a blocking pop would then hang whichever
+        # thread is reporting the metric -- a request thread, in a Rails application.
+        begin
+          @queue.pop(true)
+        rescue ThreadError
+          nil
+        end
       end
 
       ensure_worker_thread!
@@ -264,16 +277,26 @@ module PrometheusExporter
       raise
     end
 
+    # Any TLS setting at all turns encryption on. Requiring the full trio meant the two
+    # ordinary configurations -- verify the server with a CA, or present a client
+    # certificate -- both fell back to a plaintext socket without a word.
     def use_ssl?
-      @tls_ca_file && @tls_cert_file && @tls_key_file
+      !(@tls_ca_file.nil? && @tls_cert_file.nil? && @tls_key_file.nil?)
     end
 
     def build_ssl_context
       require "openssl"
       ssl_context = OpenSSL::SSL::SSLContext.new()
-      ssl_context.cert = OpenSSL::X509::Certificate.new(File.read(@tls_cert_file))
-      ssl_context.key = OpenSSL::PKey::RSA.new(File.read(@tls_key_file))
-      ssl_context.ca_file = @tls_ca_file
+      if @tls_cert_file && @tls_key_file
+        ssl_context.cert = OpenSSL::X509::Certificate.new(File.read(@tls_cert_file))
+        ssl_context.key = OpenSSL::PKey::RSA.new(File.read(@tls_key_file))
+      end
+      if @tls_ca_file
+        ssl_context.ca_file = @tls_ca_file
+      else
+        # No CA given: verify against the system trust store rather than against nothing.
+        ssl_context.cert_store = OpenSSL::X509::Store.new.tap(&:set_default_paths)
+      end
       ssl_context.verify_mode = OpenSSL::SSL::VERIFY_PEER
       ssl_context
     end
