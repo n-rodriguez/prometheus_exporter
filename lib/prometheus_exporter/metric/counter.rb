@@ -18,7 +18,11 @@ module PrometheusExporter::Metric
     end
 
     def metric_text
-      @data.map { |labels, value| "#{prefix(@name)}#{labels_text(labels)} #{value}" }.join("\n")
+      # Colliding label sets are summed: a counter must never go backwards, and dropping
+      # one of them would take its increments with it.
+      group_by_rendered_labels(@data)
+        .map { |_labels, text, keys| "#{prefix(@name)}#{text} #{keys.sum { |key| @data[key] }}" }
+        .join("\n")
     end
 
     def to_h
@@ -30,21 +34,25 @@ module PrometheusExporter::Metric
     end
 
     def observe(increment = 1, labels = {})
+      labels ||= {}
       @data[labels] ||= 0
       @data[labels] += increment
     end
 
     def increment(labels = {}, value = 1)
+      labels ||= {}
       @data[labels] ||= 0
       @data[labels] += value
     end
 
     def decrement(labels = {}, value = 1)
+      labels ||= {}
       @data[labels] ||= 0
       @data[labels] -= value
     end
 
     def reset(labels = {}, value = 0)
+      labels ||= {}
       @data[labels] = value
     end
   end

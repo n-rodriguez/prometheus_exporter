@@ -23,10 +23,8 @@ module PrometheusExporter::Metric
 
     def to_h
       data = {}
-      calculate_all_quantiles.each do |labels, quantiles|
-        count = @counts[labels]
-        sum = @sums[labels]
-        data[labels] = { "count" => count, "sum" => sum }
+      @counts.each_key do |labels|
+        data[labels] = { "count" => @counts[labels], "sum" => @sums[labels] }
       end
       data
     end
@@ -54,27 +52,44 @@ module PrometheusExporter::Metric
       result
     end
 
+    # Rotation is driven from here as well as from #observe: a summary that stops receiving
+    # observations would otherwise serve its last quantiles forever, showing a healthy p99
+    # for an endpoint that has gone silent.
     def calculate_all_quantiles
-      buffer = @buffers[@current_buffer]
+      rotate_if_needed
 
       result = {}
-      buffer.each { |labels, raw_data| result[labels] = calculate_quantiles(raw_data) }
+      @buffers.each { |buffer| buffer.each_key { |labels| result[labels] ||= [] } }
+      result.each_key do |labels|
+        raw_data = @buffers[0].fetch(labels, []) + @buffers[1].fetch(labels, [])
+        result[labels] = calculate_quantiles(raw_data)
+      end
 
+      result.reject! { |_labels, quantiles| quantiles.empty? }
       result
     end
 
+    # Iterates over the known label sets rather than over the quantiles: _sum and _count are
+    # cumulative and must stay monotonic, so they keep being served once the observation
+    # buffers have expired. Only the quantiles disappear, leaving a gap in the graph.
+    # Colliding label sets are merged, their buffers concatenated and their totals summed.
     def metric_text
+      rotate_if_needed
+
       text = +""
       first = true
-      calculate_all_quantiles.each do |labels, quantiles|
+      group_by_rendered_labels(@counts, "quantile").each do |rendered, rendered_text, keys|
         text << "\n" unless first
         first = false
-        quantiles.each do |quantile, value|
-          with_quantile = labels.merge(quantile: quantile)
+
+        raw_data = keys.flat_map { |key| @buffers[0].fetch(key, []) + @buffers[1].fetch(key, []) }
+        calculate_quantiles(raw_data).each do |quantile, value|
+          with_quantile = rendered.merge("quantile" => quantile)
           text << "#{prefix(@name)}#{labels_text(with_quantile)} #{value.to_f}\n"
         end
-        text << "#{prefix(@name)}_sum#{labels_text(labels)} #{@sums[labels]}\n"
-        text << "#{prefix(@name)}_count#{labels_text(labels)} #{@counts[labels]}"
+
+        text << "#{prefix(@name)}_sum#{rendered_text} #{keys.sum { |key| @sums[key] }}\n"
+        text << "#{prefix(@name)}_count#{rendered_text} #{keys.sum { |key| @counts[key] }}"
       end
       text
     end
@@ -88,23 +103,42 @@ module PrometheusExporter::Metric
       nil
     end
 
+    # Catches up on every window that elapsed rather than rotating once per call: when this
+    # is reached from a render after a long silence, a single rotation would keep serving
+    # the other buffer's stale quantiles. Two catch-up rotations empty both buffers, which
+    # is what "no observation for two windows" should look like.
     def rotate_if_needed
-      if (now = Process.clock_gettime(Process::CLOCK_MONOTONIC)) > (@last_rotated + ROTATE_AGE)
-        @last_rotated = now
-        @buffers[@current_buffer].each { |labels, raw| raw.clear }
-        @current_buffer = @current_buffer == 0 ? 1 : 0
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      elapsed = now - @last_rotated
+      return nil if elapsed <= ROTATE_AGE
+
+      # Both orderings below matter because this also runs from the render path, which the
+      # web server wraps in Timeout. Clear a buffer before switching onto it, so an
+      # interruption between the two cannot leave the live window staged for the next
+      # clear; and only advance @last_rotated once the rotations are through, so an
+      # interruption does not consume a rotation without performing it.
+      rotations = (elapsed / ROTATE_AGE).floor
+      [rotations, @buffers.length].min.times do
+        target = @current_buffer == 0 ? 1 : 0
+        @buffers[target].each_value(&:clear)
+        @current_buffer = target
       end
+
+      # Stay on the rotation grid instead of restarting it from now, so the window a sample
+      # lives in does not depend on when /metrics happened to be scraped.
+      @last_rotated = now - (elapsed % ROTATE_AGE)
       nil
     end
 
+    # Only the current buffer is fed; #calculate_all_quantiles unions both at render time.
+    # Writing to both doubled the memory a summary holds for no added coverage.
     def observe(value, labels = nil)
       labels ||= {}
       ensure_summary(labels)
       rotate_if_needed
 
       value = value.to_f
-      @buffers[0][labels] << value
-      @buffers[1][labels] << value
+      @buffers[@current_buffer][labels] << value
       @sums[labels] += value
       @counts[labels] += 1
     end
