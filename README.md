@@ -8,6 +8,8 @@ To learn more see [Instrumenting Rails with Prometheus](https://samsaffron.com/a
 * [Migrating from v0.x](#migrating-from-v0x)
 * [Installation](#installation)
 * [Usage](#usage)
+  * [Exporter Process Configuration](#exporter-process-configuration)
+  * [Serving metrics over TLS](#serving-metrics-over-tls)
   * [Single process mode](#single-process-mode)
     * [Custom quantiles and buckets](#custom-quantiles-and-buckets)
   * [Multi process mode](#multi-process-mode)
@@ -40,7 +42,8 @@ To learn more see [Instrumenting Rails with Prometheus](https://samsaffron.com/a
 
 ## Requirements
 
-Minimum Ruby of version 3.0.0 is required, Ruby 2.7 is EOL as of March 31st 2023.
+Minimum Ruby of version 3.2.0 is required. The authoritative value is
+`required_ruby_version` in `prometheus_exporter.gemspec`; this section follows it.
 
 ## Migrating from v0.x
 
@@ -798,7 +801,7 @@ end
 Next, launch the exporter process:
 
 ```
-$ bin/prometheus_exporter --collector examples/custom_collector.rb
+$ bundle exec prometheus_exporter --collector examples/custom_collector.rb
 ```
 
 In your application send metrics you want:
@@ -862,7 +865,7 @@ ruby_web_requests{hostname="app-server-01"} 1
 
 ### Exporter Process Configuration
 
-When running the process for `prometheus_exporter` using `bin/prometheus_exporter`, there are several configurations that
+When running the process for `prometheus_exporter` using `prometheus_exporter`, there are several configurations that
 can be passed in:
 
 ```
@@ -878,9 +881,13 @@ Usage: prometheus_exporter [options]
     -g, --histogram                  Use histogram instead of summary for aggregations
         --auth FILE                  (optional) enable basic authentication using a htpasswd FILE
         --realm REALM                (optional) Use REALM for basic authentication (default: "Prometheus Exporter")
+        --auth-send-metrics          (optional) also require basic authentication on /send-metrics. Senders must be able to present credentials
         --unicorn-listen-address ADDRESS
                                      (optional) Address where unicorn listens on (unix or TCP address)
         --unicorn-master PID_FILE    (optional) PID file of unicorn master process to monitor unicorn
+        --logger-path PATH           (optional) Path to file for logger output. Defaults to STDERR
+        --tls-key-file PATH          (optional) Enable server TLS using a private key PATH
+        --tls-cert-file PATH         (optional) Enable server TLS using a certificate PATH
 ```
 
 #### Example
@@ -916,7 +923,12 @@ Additionally, the `--realm` option may be used to provide a customized realm for
 Notes:
 
 * You will need to create a `htpasswd` formatted file before hand which contains one or more user:password entries
-* Only the basic `crypt` encryption is currently supported
+* Only the basic DES `crypt` format is supported: WEBrick refuses MD5 and bcrypt files,
+  which is what `htpasswd` produces by default and with `-B`, and the exporter now fails
+  at startup with an explicit message rather than on every scrape
+* **DES crypt only considers the first 8 characters of a password.** A longer one is not
+  stronger. If that is not acceptable, put the exporter behind an authenticating proxy
+  instead of using this option
 
 A simple `htpasswd` file can be created with the Apache `htpasswd` utility; e.g:
 
@@ -925,6 +937,34 @@ $ htpasswd -cdb my-htpasswd-file my-user my-unencrypted-password
 ```
 
 This will create a file named `my-htpasswd-file` which is suitable for use the `--auth` option.
+
+### Serving metrics over TLS
+
+The exporter can serve `/metrics` over HTTPS. Both options are required: supplying only
+one raises rather than quietly serving plaintext, whether you use the CLI or build a
+`WebServer` yourself.
+
+```
+$ prometheus_exporter --tls-cert-file cert.pem --tls-key-file key.pem
+```
+
+On the sending side, `PrometheusExporter::Client` enables TLS as soon as any of
+`tls_ca_file`, `tls_cert_file` or `tls_key_file` is given. Supply `tls_ca_file` alone to
+verify the server against a private CA; supply the certificate and its key together to
+present a client certificate as well. With no CA given, the system trust store is used.
+
+```ruby
+PrometheusExporter::Client.new(
+  host: "exporter.internal",
+  port: 9394,
+  tls_ca_file: "ca.pem",
+)
+```
+
+Note that `/send-metrics` is **not** authenticated by `--auth`, which only covers
+`/metrics`. Pass `--auth-send-metrics` to require credentials there too -- but only once
+your senders can present them, since the shipped client cannot yet, and enabling it
+without that drops every metric silently.
 
 ### Client default labels
 
@@ -1011,21 +1051,21 @@ PrometheusExporter::Client.new(log_level: Logger::DEBUG)
 You can run `prometheus_exporter` project using an official Docker image:
 
 ```bash
-docker pull discourse/prometheus_exporter:latest
+docker pull ghcr.io/discourse/prometheus_exporter:latest
 # or use specific version
-docker pull discourse/prometheus_exporter:x.x.x
+docker pull ghcr.io/discourse/prometheus_exporter:x.x.x
 ```
 
 The start the container:
 
 ```bash
-docker run -p 9394:9394 discourse/prometheus_exporter
+docker run -p 9394:9394 ghcr.io/discourse/prometheus_exporter
 ```
 
 Additional flags could be included:
 
 ```
-docker run -p 9394:9394 discourse/prometheus_exporter --verbose --prefix=myapp
+docker run -p 9394:9394 ghcr.io/discourse/prometheus_exporter --verbose --prefix=myapp
 ```
 
 ## Docker/Kubernetes Healthcheck
@@ -1038,7 +1078,7 @@ Example:
 services:
   rails-exporter:
     command:
-      - bin/prometheus_exporter
+      - prometheus_exporter
       - -b
       - 0.0.0.0
     healthcheck:

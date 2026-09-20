@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# lib/ on the load path: prometheus_exporter/server/type_collector.rb requires by absolute
+# path, so from a checkout this file used to die on a LoadError. An installed gem hides it,
+# since rubygems activates the spec's lib path.
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
 require_relative "../lib/prometheus_exporter"
 require_relative "../lib/prometheus_exporter/client"
 require_relative "../lib/prometheus_exporter/server"

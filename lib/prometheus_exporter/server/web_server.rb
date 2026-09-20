@@ -80,6 +80,13 @@ module PrometheusExporter::Server
 
       webrick_options = { Port: @port, BindAddress: @bind, Logger: @logger, AccessLog: @access_log }
 
+      # Refused here and not only in the CLI: the single-process setup documented in the
+      # README builds WebServer directly, and half a pair used to start a plaintext
+      # listener while the operator believed /metrics was HTTPS.
+      if opts[:tls_cert_file].nil? ^ opts[:tls_key_file].nil?
+        raise ArgumentError, "tls_cert_file and tls_key_file must be supplied together"
+      end
+
       if opts[:tls_cert_file] && opts[:tls_key_file]
         require "webrick/https"
         require "openssl"

@@ -5,6 +5,10 @@ require "optparse"
 require "json"
 require "logger"
 
+# Same reason as bench/bench.rb: absolute requires inside lib/ need it on the load path,
+# which rubygems does for an installed gem but not for a checkout.
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
 require_relative "./../lib/prometheus_exporter"
 require_relative "./../lib/prometheus_exporter/server"
 
