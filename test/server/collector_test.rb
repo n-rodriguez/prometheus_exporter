@@ -1207,4 +1207,89 @@ class PrometheusCollectorTest < Minitest::Test
     )
     mock_unicorn_listener_address_stats.verify
   end
+
+  def test_it_caps_summary_quantiles_coming_from_the_network
+    collector = PrometheusExporter::Server::Collector.new
+    collector.process(
+      {
+        "type" => "summary",
+        "name" => "huge_summary",
+        "help" => "h",
+        "opts" => {
+          "quantiles" => Array.new(50_000) { |i| i / 50_000.0 },
+        },
+        "value" => 1,
+      }.to_json,
+    )
+
+    quantile_lines = collector.prometheus_metrics_text.lines.grep(/\Ahuge_summary\{/)
+
+    # The option is dropped, not truncated, so the metric falls back to DEFAULT_QUANTILES.
+    assert_equal(
+      PrometheusExporter::Metric::Summary::DEFAULT_QUANTILES.length,
+      quantile_lines.length,
+    )
+  end
+
+  def test_it_refuses_a_payload_whose_name_is_missing_or_empty
+    PrometheusExporter::Metric::Base.default_prefix = ""
+    collector = PrometheusExporter::Server::Collector.new(logger: Logger.new(IO::NULL))
+    collector.process({ "type" => "counter", "name" => "-", "value" => 1 }.to_json)
+    collector.process({ "type" => "counter", "name" => nil, "value" => 41 }.to_json)
+    collector.process({ "type" => "counter", "name" => "", "value" => 100 }.to_json)
+
+    # Only the first payload has a name. The other two must not fold onto it just because
+    # sanitizing nil and "" lands on the same identifier.
+    assert_match(/^_ 1$/, collector.prometheus_metrics_text)
+  end
+
+  def test_it_refuses_summary_quantiles_that_are_not_an_array
+    collector = PrometheusExporter::Server::Collector.new
+    collector.process(
+      {
+        "type" => "summary",
+        "name" => "typed_summary",
+        "help" => "h",
+        "opts" => {
+          "quantiles" => "all of them",
+        },
+        "value" => 1,
+      }.to_json,
+    )
+
+    text = collector.prometheus_metrics_text
+
+    assert_match(/typed_summary_count 1/, text)
+  end
+
+  def test_it_renders_one_help_block_for_names_that_sanitize_alike
+    collector = PrometheusExporter::Server::Collector.new
+    collector.process(
+      { "type" => "counter", "name" => "a.b", "help" => "h1", "value" => 1 }.to_json,
+    )
+    collector.process(
+      { "type" => "counter", "name" => "a-b", "help" => "h2", "value" => 1 }.to_json,
+    )
+
+    help_lines = collector.prometheus_metrics_text.lines.grep(/\A# HELP a_b/)
+
+    assert_equal(1, help_lines.length)
+  end
+
+  def test_it_does_not_raise_on_a_gauge_name_that_sanitizes_to_a_total_suffix
+    collector = PrometheusExporter::Server::Collector.new
+
+    collector.process(
+      { "type" => "gauge", "name" => "jobs.total", "help" => "h", "value" => 1 }.to_json,
+    )
+
+    refute_match(/jobs/, collector.prometheus_metrics_text)
+  end
+
+  def test_collector_base_refuses_to_be_used_unimplemented
+    base = PrometheusExporter::Server::CollectorBase.new
+
+    assert_raises(RuntimeError) { base.process("{}") }
+    assert_raises(RuntimeError) { base.prometheus_metrics_text }
+  end
 end

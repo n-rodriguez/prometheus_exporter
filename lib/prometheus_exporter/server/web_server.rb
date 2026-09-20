@@ -23,6 +23,7 @@ module PrometheusExporter::Server
       @timeout = opts[:timeout] || PrometheusExporter::DEFAULT_TIMEOUT
       @verbose = opts[:verbose] || false
       @auth = opts[:auth]
+      @auth_send_metrics = opts[:auth_send_metrics] || false
       @realm = opts[:realm] || PrometheusExporter::DEFAULT_REALM
       @pid = Process.pid
 
@@ -63,6 +64,12 @@ module PrometheusExporter::Server
       end
 
       @logger.info "Using Basic Authentication via #{@auth}" if @verbose && @auth
+
+      # Built once, at startup: the file used to be re-read and re-parsed on every single
+      # request, and an unreadable format only surfaced as a failing scrape. WEBrick
+      # raises NotImplementedError on MD5 and bcrypt files, which is a ScriptError and so
+      # escapes any `rescue =>` downstream.
+      @basic_auth = build_basic_auth(@auth) if @auth
 
       if %w[ALL ANY].include?(@bind)
         @logger.info "Listening on both 0.0.0.0/:: network interfaces"
@@ -107,6 +114,13 @@ module PrometheusExporter::Server
             res.body = metrics
           end
         elsif req.path == "/send-metrics"
+          # /send-metrics is the write surface: leaving it open while /metrics is
+          # authenticated protects the reading of the data but not the forging of it.
+          # Off by default all the same, because PrometheusExporter::Client cannot
+          # authenticate yet, and turning it on without a client that can would drop every
+          # metric silently.
+          authenticate(req, res) if @auth && @auth_send_metrics
+
           handle_metrics(req, res)
         elsif req.path == "/ping"
           res.body = "PONG"
@@ -120,21 +134,31 @@ module PrometheusExporter::Server
 
     def handle_metrics(req, res)
       @sessions_total.observe
+      rejected = 0
+      last_error_status = nil
+
       req.body do |block|
         begin
           @metrics_total.observe
           @collector.process(block)
         rescue => e
+          # Keep draining the batch. Bailing out here used to abandon every later message
+          # of a chunked session -- up to MAX_SOCKET_AGE seconds of metrics from that
+          # process, of every type -- because one of them was malformed.
           @logger.error "\n\n#{e.inspect}\n#{e.backtrace}\n\n" if @verbose
           @bad_metrics_total.observe
-          res.body = "Bad Metrics #{e}"
-          res.status = e.respond_to?(:status_code) ? e.status_code : 500
-          break
+          rejected += 1
+          last_error_status = e.respond_to?(:status_code) ? e.status_code : 500
         end
       end
 
-      res.body = "OK"
-      res.status = 200
+      if rejected > 0
+        res.body = "Bad Metrics: #{rejected} message(s) rejected"
+        res.status = last_error_status
+      else
+        res.body = "OK"
+        res.status = 200
+      end
     end
 
     def start
@@ -196,11 +220,24 @@ module PrometheusExporter::Server
     end
 
     def authenticate(req, res)
-      htpasswd = WEBrick::HTTPAuth::Htpasswd.new(@auth)
-      basic_auth =
-        WEBrick::HTTPAuth::BasicAuth.new({ Realm: @realm, UserDB: htpasswd, Logger: @logger })
+      @basic_auth.authenticate(req, res)
+    end
 
-      basic_auth.authenticate(req, res)
+    def build_basic_auth(path)
+      htpasswd = WEBrick::HTTPAuth::Htpasswd.new(path)
+      # AutoReloadUserDB is on by default, which re-reads and re-parses the file on every
+      # request -- and, now that the instance is shared, lets one thread clear the hash
+      # while another reads it, answering 401 to a valid credential.
+      WEBrick::HTTPAuth::BasicAuth.new(
+        { Realm: @realm, UserDB: htpasswd, Logger: @logger, AutoReloadUserDB: false },
+      )
+      # MD5 raises NotImplementedError, a ScriptError that escapes `rescue =>`; bcrypt and
+      # a malformed file raise plain StandardError. All three mean the same thing here.
+    rescue NotImplementedError, StandardError => e
+      raise ArgumentError,
+            "htpasswd file #{path} is in a format WEBrick cannot read (#{e.message}). " \
+              "Only DES crypt is supported; generate the file with " \
+              "`htpasswd -cdb #{path} <user> <password>`."
     end
   end
 end
