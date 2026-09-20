@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking
+
+- The `process` collector prefixes its metric names, as the thirteen other collectors
+  already did: `rss` becomes `process_rss`, `heap_live_slots` becomes
+  `process_heap_live_slots`, and so on. Dashboards and recording rules selecting the old
+  names return nothing.
+- `sidekiq_stats` series now carry the `custom_labels` the sender provides; they used to
+  be dropped, so two clusters overwrote each other.
+- `shoryuken_job_duration_seconds` is built from `default_aggregation`, so it becomes a
+  histogram rather than a summary when `-g` is set.
+- The Docker image runs as an unprivileged user, uid 1000. A TLS key or htpasswd file
+  mounted `0600 root` is no longer readable by the process; adjust the ownership or the
+  mode of anything mounted into the container.
+- An htpasswd file WEBrick cannot read -- MD5 or bcrypt, which is what `htpasswd`
+  produces by default and with `-B` -- now aborts at startup with an explicit message,
+  where it used to fail on every scrape instead.
+- `PeriodicStats.start` no longer accepts arbitrary keywords, so a misspelled one raises
+  instead of silently shipping metrics without labels.
+
+### Security
+
+- Metric and label names are sanitized before rendering, and the `# HELP` line escapes
+  backslashes and newlines. A payload could previously forge series and inject whole
+  exposition lines.
+- A malformed `X-Amzn-Trace-Id` no longer raises out of the Rack middleware before the
+  application runs, and `X-Request-Start` is validated rather than recorded as a queue
+  time of 1.79 billion seconds.
+- The client enables TLS as soon as any TLS option is given; requiring all three meant the
+  two ordinary configurations silently sent in plaintext.
+- CI permissions are scoped per job and every action is pinned by commit SHA, so a job
+  running pull-request code no longer inherits a token able to push to `main`.
+- `--auth-send-metrics` extends basic authentication to `/send-metrics`.
+
+### Fixed
+
+- One malformed message no longer costs the rest of a client's batch: `/send-metrics`
+  used to abandon the chunked stream and answer 200 OK regardless.
+- Collectors survive payloads with missing keys, null values and wrongly typed labels,
+  and a label name colliding with one the collector sets no longer emits a duplicate that
+  makes Prometheus reject the entire scrape.
+- A summary stops serving its last quantiles once observations stop, and holds half the
+  memory it used to.
+- `MethodProfiler` state moves to Fiber storage, so database timings survive both a child
+  fiber and a fiber-per-request server.
+- The Docker image builds again: it started from Ruby 3.1 against a 3.2 gemspec floor, and
+  its `GEM_VERSION` build argument was out of scope and silently ignored.
+- The shipped `examples/custom_collector.rb` inherits from a class that exists and parses
+  the payload it is actually handed.
+- `json`, `logger` and `timeout` are declared as dependencies. `logger` is no longer a
+  default gem on Ruby 4.0, so a non-Rails application got a `LoadError` at boot; the other
+  two are declared because `lib/` requires them unconditionally.
+
 ## [2.3.1] - 2025-11-11
 
 - FIX: get controller full path instead of controller name - Alex Platteeuw

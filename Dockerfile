@@ -20,7 +20,9 @@ RUN apt-get update \
 RUN gem install --no-doc --version=${GEM_VERSION} prometheus_exporter
 
 # Unprivileged: an image running as root puts any remote code execution in WEBrick at uid 0.
-RUN useradd --create-home --shell /usr/sbin/nologin exporter
+# The uid is fixed, not left to the base image: it is what an operator has to grant on
+# anything mounted into the container, and the CHANGELOG names it.
+RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin exporter
 USER exporter
 
 EXPOSE 9394

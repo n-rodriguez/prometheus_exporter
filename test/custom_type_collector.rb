@@ -5,9 +5,14 @@ class CustomTypeCollector < PrometheusExporter::Server::TypeCollector
     "custom1"
   end
 
-  def observe(obj)
-    p obj
+  # collect, not observe: the TypeCollector interface is type/collect/metrics, and a
+  # collector implementing observe receives nothing, silently.
+  def collect(obj)
+    @collected ||= []
+    @collected << obj
   end
+
+  attr_reader :collected
 
   def metrics
     []
