@@ -37,8 +37,18 @@ module PrometheusExporter::Server
     end
 
     def collect(object)
-      object["queues"].each do |queue|
-        queue["labels"].merge!(object["custom_labels"]) if object["custom_labels"]
+      # queues, and a queue's labels, are both optional on the wire. Dereferencing them
+      # blind raised out of collect, which used to abort the sender's whole batch.
+      queues = object["queues"]
+      return if !queues.is_a?(Array)
+
+      custom_labels = object["custom_labels"]
+      queues.each do |queue|
+        next if !queue.is_a?(Hash)
+
+        if custom_labels
+          queue["labels"] = labels_hash(queue["labels"]).merge(labels_hash(custom_labels))
+        end
         @sidekiq_metrics << queue
       end
     end

@@ -19,6 +19,21 @@ end
 
 require "minitest/mock"
 require "minitest/autorun"
+
+# TypeCollector.dropped_series_total is process-wide, so a test that fills a collector's
+# series cap leaks its counter into whatever test Minitest happens to run next -- and the
+# order is random, so the failure only shows up on some CI cells. Reset before every test
+# rather than in each file that noticed.
+module ResetSharedCollectorState
+  def before_setup
+    super
+    if defined?(PrometheusExporter::Server::TypeCollector)
+      PrometheusExporter::Server::TypeCollector.reset_dropped_series!
+    end
+  end
+end
+
+Minitest::Test.prepend(ResetSharedCollectorState)
 require "ostruct"
 require "redis"
 

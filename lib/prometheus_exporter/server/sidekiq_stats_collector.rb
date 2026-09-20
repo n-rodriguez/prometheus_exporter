@@ -30,11 +30,15 @@ module PrometheusExporter::Server
       SIDEKIQ_STATS_GAUGES.each_key { |name| gauges[name]&.reset! }
 
       sidekiq_metrics.map do |metric|
+        labels = metric["custom_labels"] || {}
+
         SIDEKIQ_STATS_GAUGES.map do |name, help|
           if (value = metric["stats"][name])
             gauge =
               gauges[name] ||= PrometheusExporter::Metric::Gauge.new("sidekiq_stats_#{name}", help)
-            gauge.observe(value)
+            # Every other collector labels its series; this one dropped custom_labels, so
+            # two clusters reporting the same stat overwrote each other.
+            gauge.observe(value, labels)
           end
         end
       end
@@ -43,6 +47,11 @@ module PrometheusExporter::Server
     end
 
     def collect(object)
+      # Validated here rather than at render time: an absent stats key used to be accepted
+      # silently and then raise from prometheus_metrics_text, taking /metrics down for
+      # every collector until the sample expired.
+      return if !object["stats"].is_a?(Hash)
+
       @sidekiq_metrics << object
     end
   end

@@ -28,8 +28,13 @@ module PrometheusExporter::Server
 
     def initialize
       @process_metrics = MetricsContainer.new(ttl: MAX_METRIC_AGE)
+      # metric_labels is part of the series identity, so it belongs in the filter: the
+      # documented Process.start(type: "web") next to Process.start(type: "worker") in one
+      # process otherwise had each sample evict the other.
       @process_metrics.filter = ->(new_metric, old_metric) do
-        new_metric["pid"] == old_metric["pid"] && new_metric["hostname"] == old_metric["hostname"]
+        new_metric["pid"] == old_metric["pid"] &&
+          new_metric["hostname"] == old_metric["hostname"] &&
+          (new_metric["metric_labels"] || {}) == (old_metric["metric_labels"] || {})
       end
     end
 
@@ -50,7 +55,7 @@ module PrometheusExporter::Server
         PROCESS_GAUGES.map do |k, help|
           k = k.to_s
           if v = m[k]
-            g = metrics[k] ||= PrometheusExporter::Metric::Gauge.new(k, help)
+            g = metrics[k] ||= PrometheusExporter::Metric::Gauge.new("process_#{k}", help)
             g.observe(v, metric_key)
           end
         end
@@ -58,7 +63,7 @@ module PrometheusExporter::Server
         PROCESS_COUNTERS.map do |k, help|
           k = k.to_s
           if v = m[k]
-            c = metrics[k] ||= PrometheusExporter::Metric::Counter.new(k, help)
+            c = metrics[k] ||= PrometheusExporter::Metric::Counter.new("process_#{k}", help)
             c.observe(v, metric_key)
           end
         end

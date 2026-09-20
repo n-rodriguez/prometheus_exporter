@@ -23,10 +23,15 @@ module PrometheusExporter::Server
     end
 
     def metrics
+      # Reset first, like the Sidekiq collectors do: the gauge hash outlived the samples,
+      # so a host that stopped reporting kept its last value exported forever.
+      GOOD_JOB_GAUGES.each_key { |name| gauges[name]&.reset! }
+
       return [] if good_job_metrics.length == 0
 
       good_job_metrics.map do |metric|
-        labels = metric.fetch("custom_labels", {})
+        labels = # fetch returns nil, not {}, when the key is present with a JSON null.
+          metric["custom_labels"] || {}
 
         GOOD_JOB_GAUGES.map do |name, help|
           value = metric[name.to_s]
