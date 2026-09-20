@@ -6,16 +6,21 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
         with:
           ruby-version: 3.2
           bundler: latest
@@ -25,4 +30,6 @@ jobs:
         run: bin/rubocop
 
       - name: Syntax tree
-        run: bin/stree check Gemfile $(git ls-files '*.rb') $(git ls-files '*.rake') $(git ls-files '*.thor')
+        # The extensionless Ruby files and the gemspec were checked by nothing, which is
+        # how exe/ ended up in a different quoting style from the rest of the codebase.
+        run: bin/stree check Gemfile Rakefile Guardfile Appraisals prometheus_exporter.gemspec exe/prometheus_exporter $(git ls-files '*.rb') $(git ls-files '*.rake') $(git ls-files '*.thor')

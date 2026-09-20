@@ -1,0 +1,13 @@
+# Actions are pinned by commit SHA, which is what makes a repointed tag harmless -- and
+# what would otherwise leave them frozen. Dependabot is the other half of that trade.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: bundler
+    directory: /
+    schedule:
+      interval: weekly
